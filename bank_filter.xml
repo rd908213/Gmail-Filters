@@ -1,0 +1,22 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns='http://www.w3.org/2005/Atom' xmlns:apps='http://schemas.google.com/apps/2006'>
+	<title>Mail Filters</title>
+	<id>tag:mail.google.com,2008:filters:z0000001788035445583*2297923651986186862</id>
+	<updated>2026-10-04T17:53:42Z</updated>
+	<author>
+		<name>Daniel Claud</name>
+		<email>rd.claudiv@gmail.com</email>
+	</author>
+	<entry>
+		<category term='filter'></category>
+		<title>Mail Filter</title>
+		<id>tag:mail.google.com,2008:filter:z0000001788035445583*2297923651986186862</id>
+		<updated>2026-10-04T17:53:42Z</updated>
+		<content></content>
+		<apps:property name='hasTheWord' value='{from:schwab.com from:webull.com from:webull.us from:webullpay.com from:robinhood.com from:binance.us from:stockpile.com from:tdameritrade.com} {eStatement &quot;account statement&quot; &quot;monthly statement&quot; statement statements &quot;credit card statement&quot; &quot;Brokerage Statement&quot;}'/>
+		<apps:property name='label' value='Banking'/>
+		<apps:property name='shouldArchive' value='true'/>
+		<apps:property name='sizeOperator' value='s_sl'/>
+		<apps:property name='sizeUnit' value='s_smb'/>
+	</entry>
+</feed>
