@@ -183,6 +183,47 @@ def execute_imap_chunk_with_retry(
                     print(f"Notice: Reconnect attempt failed: {rec_err}")
 
 
+def to_imap_id_set(items):
+    """
+    Formats a sequence of message IDs or UIDs (bytes or str) into a comma-delimited
+    ASCII bytes sequence for IMAP commands.
+    """
+    if not items:
+        return b""
+    if isinstance(items[0], bytes):
+        return b",".join(items)
+    return ",".join(str(x) for x in items).encode("ascii")
+
+
+def fetch_imap_chunk(
+    mail_holder,
+    id_set,
+    query,
+    use_uid=True,
+    reconnect_fn=None,
+    fallback_query=None,
+):
+    """
+    Fetches and parses a chunk of IMAP messages with retry and optional fallback query.
+    Returns (status: str, parsed_items: list[tuple[bytes, bytes]]).
+    """
+    def _do_fetch(q):
+        if use_uid:
+            return mail_holder[0].uid("FETCH", id_set, q)
+        return mail_holder[0].fetch(id_set, q)
+
+    status, data = execute_imap_chunk_with_retry(
+        lambda: _do_fetch(query), max_retries=3, reconnect_fn=reconnect_fn
+    )
+    parsed = parse_fetch_batch_data(data, use_uid=use_uid)
+    if status == "OK" and not parsed and fallback_query:
+        status, data = execute_imap_chunk_with_retry(
+            lambda: _do_fetch(fallback_query), max_retries=3, reconnect_fn=reconnect_fn
+        )
+        parsed = parse_fetch_batch_data(data, use_uid=use_uid)
+    return status, parsed
+
+
 
 def create_loading_bar(current, total, label="", bar_length=20):
     """
@@ -572,33 +613,15 @@ def process_chunk(
     if not chunk:
         return
 
-    id_set = (
-        b",".join(chunk)
-        if isinstance(chunk[0], bytes)
-        else ",".join(str(x) for x in chunk).encode("ascii")
+    id_set = to_imap_id_set(chunk)
+    status, parsed_headers = fetch_imap_chunk(
+        mail_holder,
+        id_set,
+        header_fields_query,
+        use_uid=use_uid,
+        reconnect_fn=reconnect_fn,
+        fallback_query=body_query,
     )
-
-    def do_fetch_headers():
-        if use_uid:
-            return mail_holder[0].uid("FETCH", id_set, header_fields_query)
-        return mail_holder[0].fetch(id_set, header_fields_query)
-
-    status, data = execute_imap_chunk_with_retry(
-        do_fetch_headers, max_retries=3, reconnect_fn=reconnect_fn
-    )
-
-    parsed_headers = parse_fetch_batch_data(data, use_uid=use_uid)
-
-    if status == "OK" and not parsed_headers:
-        def do_fetch_fallback():
-            if use_uid:
-                return mail_holder[0].uid("FETCH", id_set, body_query)
-            return mail_holder[0].fetch(id_set, body_query)
-
-        status, data = execute_imap_chunk_with_retry(
-            do_fetch_fallback, max_retries=3, reconnect_fn=reconnect_fn
-        )
-        parsed_headers = parse_fetch_batch_data(data, use_uid=use_uid)
 
     headers_dict = {}
     for m_id, raw_hdr in parsed_headers:
@@ -671,21 +694,14 @@ def process_chunk(
             except Exception:
                 pass
 
-        body_id_set = (
-            b",".join(needed_uids)
-            if isinstance(needed_uids[0], bytes)
-            else ",".join(str(x) for x in needed_uids).encode("ascii")
+        body_id_set = to_imap_id_set(needed_uids)
+        b_status, parsed_bodies = fetch_imap_chunk(
+            mail_holder,
+            body_id_set,
+            body_query,
+            use_uid=use_uid,
+            reconnect_fn=reconnect_fn,
         )
-
-        def do_fetch_bodies():
-            if use_uid:
-                return mail_holder[0].uid("FETCH", body_id_set, body_query)
-            return mail_holder[0].fetch(body_id_set, body_query)
-
-        b_status, b_data = execute_imap_chunk_with_retry(
-            do_fetch_bodies, max_retries=3, reconnect_fn=reconnect_fn
-        )
-        parsed_bodies = parse_fetch_batch_data(b_data, use_uid=use_uid)
         for b_id, raw_body in parsed_bodies:
             full_msg = email.message_from_bytes(raw_body)
             orig_item = unresolved_map.get(b_id)
@@ -759,6 +775,38 @@ def get_trash_folder(mail):
     except Exception as e:
         print(f"Notice: Could not automatically detect Trash folder ({e}).")
     return "[Gmail]/Trash"
+
+
+def move_uids_to_trash(mail, uids, trash_folder, chunk_size=DEFAULT_CHUNK_SIZE):
+    """
+    Moves a sequence of message UIDs to the trash folder in chunks and marks them deleted.
+    Returns the count of successfully deleted messages.
+    """
+    deleted_count = 0
+    for batch in chunk_list(uids, chunk_size):
+        uid_set = to_imap_id_set(batch)
+        try:
+            mail.uid("COPY", uid_set, trash_folder)
+            mail.uid("STORE", uid_set, "+FLAGS", "(\\Deleted)")
+            deleted_count += len(batch)
+        except Exception:
+            for s_uid in batch:
+                raw_uid = s_uid if isinstance(s_uid, bytes) else str(s_uid).encode("ascii")
+                try:
+                    mail.uid("COPY", raw_uid, trash_folder)
+                    mail.uid("STORE", raw_uid, "+FLAGS", "(\\Deleted)")
+                    deleted_count += 1
+                except Exception:
+                    try:
+                        mail.uid("STORE", raw_uid, "+FLAGS", "(\\Deleted)")
+                        deleted_count += 1
+                    except Exception as e:
+                        print(f"Error deleting message {s_uid}: {e}")
+    try:
+        mail.expunge()
+    except Exception as e:
+        print(f"Expunge notice: {e}")
+    return deleted_count
 
 
 def click_single_link(url, session=None, timeout=10):
@@ -1111,30 +1159,15 @@ def find_emails_for_domain_with_unsubscribe(
             mail_holder[0] = ensure_imap_connection(mail_holder[0], username, password, mailbox)
 
     for uid_chunk in chunk_list(uids, chunk_size):
-        id_set = (
-            b",".join(uid_chunk)
-            if isinstance(uid_chunk[0], bytes)
-            else ",".join(str(x) for x in uid_chunk).encode("ascii")
+        id_set = to_imap_id_set(uid_chunk)
+        status, parsed_headers = fetch_imap_chunk(
+            mail_holder,
+            id_set,
+            header_fields_query,
+            use_uid=True,
+            reconnect_fn=reconnect_if_needed,
+            fallback_query=body_query,
         )
-
-        def do_fetch_headers():
-            return mail_holder[0].uid("FETCH", id_set, header_fields_query)
-
-        status, data = execute_imap_chunk_with_retry(
-            do_fetch_headers, max_retries=3, reconnect_fn=reconnect_if_needed
-        )
-
-        parsed_headers = parse_fetch_batch_data(data, use_uid=True)
-
-        # Fallback if server/mock returned full body instead of headers
-        if status == "OK" and not parsed_headers:
-            def do_fetch_fallback():
-                return mail_holder[0].uid("FETCH", id_set, body_query)
-
-            status, data = execute_imap_chunk_with_retry(
-                do_fetch_fallback, max_retries=3, reconnect_fn=reconnect_if_needed
-            )
-            parsed_headers = parse_fetch_batch_data(data, use_uid=True)
 
         body_needed_uids = []
         for uid, headers_raw in parsed_headers:
@@ -1161,19 +1194,14 @@ def find_emails_for_domain_with_unsubscribe(
 
         # Selective body fetch for emails from this domain that lacked List-Unsubscribe header
         if body_needed_uids:
-            body_id_set = (
-                b",".join(body_needed_uids)
-                if isinstance(body_needed_uids[0], bytes)
-                else ",".join(str(x) for x in body_needed_uids).encode("ascii")
+            body_id_set = to_imap_id_set(body_needed_uids)
+            _, parsed_bodies = fetch_imap_chunk(
+                mail_holder,
+                body_id_set,
+                body_query,
+                use_uid=True,
+                reconnect_fn=reconnect_if_needed,
             )
-
-            def do_fetch_bodies():
-                return mail_holder[0].uid("FETCH", body_id_set, body_query)
-
-            b_status, b_data = execute_imap_chunk_with_retry(
-                do_fetch_bodies, max_retries=3, reconnect_fn=reconnect_if_needed
-            )
-            parsed_bodies = parse_fetch_batch_data(b_data, use_uid=True)
             for uid, body_raw in parsed_bodies:
                 msg = email.message_from_bytes(body_raw)
                 from_hdr = msg.get("From", "")
@@ -1307,36 +1335,7 @@ def delete_emails_for_domains(
 
     mail = ensure_imap_connection(mail, username, password, mailbox)
 
-    # Process in batches of chunk_size
-    deleted_count = 0
-    for batch in chunk_list(all_uids, chunk_size):
-        uid_set = b",".join(batch) if isinstance(batch[0], bytes) else ",".join(str(x) for x in batch).encode("ascii")
-        try:
-            # 1. Copy to Gmail Trash folder
-            mail.uid("COPY", uid_set, trash_folder)
-            # 2. Mark as \Deleted in current folder
-            mail.uid("STORE", uid_set, "+FLAGS", "(\\Deleted)")
-            deleted_count += len(batch)
-        except Exception:
-            # Fallback to individual commands if batch copy fails
-            for single_uid in batch:
-                s_uid = single_uid if isinstance(single_uid, bytes) else str(single_uid).encode("ascii")
-                try:
-                    mail.uid("COPY", s_uid, trash_folder)
-                    mail.uid("STORE", s_uid, "+FLAGS", "(\\Deleted)")
-                    deleted_count += 1
-                except Exception:
-                    try:
-                        mail.uid("STORE", s_uid, "+FLAGS", "(\\Deleted)")
-                        deleted_count += 1
-                    except Exception as e:
-                        print(f"Error deleting message {single_uid}: {e}")
-
-    # Expunge to finalize removal from INBOX
-    try:
-        mail.expunge()
-    except Exception as e:
-        print(f"Expunge notice: {e}")
+    deleted_count = move_uids_to_trash(mail, all_uids, trash_folder, chunk_size=chunk_size)
 
     print(f"✓ Successfully deleted {deleted_count} email(s) (moved to '{trash_folder}').")
 
@@ -1427,15 +1426,14 @@ def build_unsubscribe_hash(
     return domain_unsub_map
 
 
-def main():
-    print("=" * 55)
-    print("   Gmail Unsubscribe Harvester, Clicker & Cleaner   ")
-    print("=" * 55)
-
+def resolve_credentials():
+    """
+    Resolves Gmail credentials from .env if valid, otherwise prompts user via terminal.
+    Returns (username: str, password: str).
+    """
     env_user = os.environ.get("GMAIL_USER", "").strip()
     env_pass = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
 
-    # Check if real credentials are provided via .env / environment
     has_valid_env = (
         bool(env_user and env_pass)
         and "your_email" not in env_user.lower()
@@ -1443,39 +1441,89 @@ def main():
     )
 
     if has_valid_env:
-        username = env_user
-        raw_password = env_pass
-        print(f"Loaded credentials from .env for: {username}")
-    else:
-        if env_user or env_pass:
-            print("Notice: .env contains default placeholder credentials. Please update .env or enter below.\n")
-        username = input("Enter your Gmail address: ").strip()
-        raw_password = getpass.getpass("Enter your Google App Password (16 chars): ").strip()
+        print(f"Loaded credentials from .env for: {env_user}")
+        return env_user, env_pass.replace(" ", "")
 
-    password = raw_password.replace(" ", "")
+    if env_user or env_pass:
+        print("Notice: .env contains default placeholder credentials. Please update .env or enter below.\n")
+    username = input("Enter your Gmail address: ").strip()
+    raw_password = getpass.getpass("Enter your Google App Password (16 chars): ").strip()
+    return username, raw_password.replace(" ", "")
 
+
+def select_output_mode():
+    """
+    Determines whether clean single-line loading bar (True) or verbose logging (False)
+    should be used based on CLI arguments, environment variables, or interactive prompt.
+    """
+    if "--verbose" in sys.argv or "-v" in sys.argv:
+        return False
+    if "--progress" in sys.argv or "--quiet" in sys.argv or "-q" in sys.argv:
+        return True
+    if os.environ.get("PROGRESS_BAR_MODE") is not None:
+        return os.environ.get("PROGRESS_BAR_MODE", "").strip().lower() in ("true", "1", "yes", "on")
+
+    print("\nTerminal Output Mode:")
+    print("  [1] Clean Loading Bar: [=======-------------] <domain> (Recommended)")
+    print("  [2] Verbose Output: Print every email and link found")
+    mode_choice = input("Select mode [1/2] (default: 1): ").strip()
+    return mode_choice != "2"
+
+
+def display_domain_map(unsub_map, title="Domains"):
+    """Prints a formatted summary of domains in the unsubscribe map."""
+    print(f"\n--- {title} ---")
+    if not unsub_map:
+        print("No domains with unsubscribe links were found.")
+        return
+
+    for d, entry in unsub_map.items():
+        link = entry.get("link") if isinstance(entry, dict) else str(entry)
+        date_val = entry.get("date") if isinstance(entry, dict) else ""
+        num_msgs = len(entry.get("emails", [])) if isinstance(entry, dict) else 0
+        date_info = f" (Date: {date_val})" if date_val else ""
+        msgs_info = f" [{num_msgs} email(s) found]" if num_msgs > 0 else ""
+        print(f"'{d}': '{link}'{date_info}{msgs_info}")
+
+
+def filter_domains_interactive(unsub_map):
+    """Interactively allows user to remove domains from the unsubscribe map."""
+    print("\n--- Domain Filter / Removal Loop ---")
+    print("Remove any domains you want to keep (e.g. your bank, GitHub, etc.).")
+    while True:
+        target = input(
+            "\nEnter domain to remove (or type 'N' to finish filtering): "
+        ).strip()
+        if target.upper() == "N":
+            break
+
+        if target in unsub_map:
+            del unsub_map[target]
+            print(f"Removed '{target}'. Current count: {len(unsub_map)}")
+        else:
+            matched_key = next(
+                (k for k in unsub_map if k.lower() == target.lower()), None
+            )
+            if matched_key:
+                del unsub_map[matched_key]
+                print(f"Removed '{matched_key}'. Current count: {len(unsub_map)}")
+            else:
+                print(f"Domain '{target}' not found in hash.")
+
+
+def main():
+    print("=" * 55)
+    print("   Gmail Unsubscribe Harvester, Clicker & Cleaner   ")
+    print("=" * 55)
+
+    username, password = resolve_credentials()
     if not username or not password:
         print("Error: Gmail address and App Password are required.")
         return
 
-    # Determine output mode: clean single-line loading bar vs verbose
-    if "--verbose" in sys.argv or "-v" in sys.argv:
-        use_progress_bar = False
-    elif "--progress" in sys.argv or "--quiet" in sys.argv or "-q" in sys.argv:
-        use_progress_bar = True
-    elif os.environ.get("PROGRESS_BAR_MODE") is not None:
-        use_progress_bar = os.environ.get("PROGRESS_BAR_MODE", "").strip().lower() in ("true", "1", "yes", "on")
-    else:
-        print("\nTerminal Output Mode:")
-        print("  [1] Clean Loading Bar: [=======-------------] <domain> (Recommended)")
-        print("  [2] Verbose Output: Print every email and link found")
-        mode_choice = input("Select mode [1/2] (default: 1): ").strip()
-        use_progress_bar = (mode_choice != "2")
-
-    if use_progress_bar:
-        print("Output mode: Clean single-line loading bar enabled.\n")
-    else:
-        print("Output mode: Verbose logging enabled.\n")
+    use_progress_bar = select_output_mode()
+    mode_desc = "Clean single-line loading bar" if use_progress_bar else "Verbose logging"
+    print(f"Output mode: {mode_desc} enabled.\n")
 
     chunk_size = int(os.environ.get("EMAIL_CHUNK_SIZE", str(DEFAULT_CHUNK_SIZE)))
     chunk_delay = float(os.environ.get("CHUNK_DELAY", str(DEFAULT_CHUNK_DELAY)))
@@ -1502,51 +1550,13 @@ def main():
             password=password,
         )
 
-        print("\n--- Initial Extracted Domains ---")
+        display_domain_map(unsub_map, title="Initial Extracted Domains")
         if not unsub_map:
-            print("No domains with unsubscribe links were found.")
             return
 
-        for d, entry in unsub_map.items():
-            link = entry.get("link") if isinstance(entry, dict) else str(entry)
-            date_val = entry.get("date") if isinstance(entry, dict) else ""
-            num_msgs = len(entry.get("emails", [])) if isinstance(entry, dict) else 0
-            date_info = f" (Date: {date_val})" if date_val else ""
-            msgs_info = f" [{num_msgs} email(s) found]" if num_msgs > 0 else ""
-            print(f"'{d}': '{link}'{date_info}{msgs_info}")
+        filter_domains_interactive(unsub_map)
 
-        # Interactive Removal / Filter loop
-        print("\n--- Domain Filter / Removal Loop ---")
-        print("Remove any domains you want to keep (e.g. your bank, GitHub, etc.).")
-        while True:
-            target = input(
-                "\nEnter domain to remove (or type 'N' to finish filtering): "
-            ).strip()
-            if target.upper() == "N":
-                break
-
-            if target in unsub_map:
-                del unsub_map[target]
-                print(f"Removed '{target}'. Current count: {len(unsub_map)}")
-            else:
-                matched_key = next(
-                    (k for k in unsub_map if k.lower() == target.lower()), None
-                )
-                if matched_key:
-                    del unsub_map[matched_key]
-                    print(f"Removed '{matched_key}'. Current count: {len(unsub_map)}")
-                else:
-                    print(f"Domain '{target}' not found in hash.")
-
-        print("\n--- Final Filtered Domains ---")
-        for d, entry in unsub_map.items():
-            link = entry.get("link") if isinstance(entry, dict) else str(entry)
-            date_val = entry.get("date") if isinstance(entry, dict) else ""
-            num_msgs = len(entry.get("emails", [])) if isinstance(entry, dict) else 0
-            date_info = f" (Date: {date_val})" if date_val else ""
-            msgs_info = f" [{num_msgs} email(s) found]" if num_msgs > 0 else ""
-            print(f"'{d}': '{link}'{date_info}{msgs_info}")
-
+        display_domain_map(unsub_map, title="Final Filtered Domains")
         if not unsub_map:
             print("All domains were filtered out. Nothing left to process.")
             return
@@ -1571,7 +1581,6 @@ def main():
             chunk_delay=chunk_delay,
             domain_emails=unsub_map.domain_emails,
         )
-
 
     finally:
         try:
