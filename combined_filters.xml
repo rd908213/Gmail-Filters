@@ -1,0 +1,84 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns='http://www.w3.org/2005/Atom' xmlns:apps='http://schemas.google.com/apps/2006'>
+	<title>Mail Filters</title>
+	<updated>2026-10-04T19:40:00Z</updated>
+	<author>
+		<name>Daniel Claud</name>
+		<email>rd.claudiv@gmail.com</email>
+	</author>
+
+	<!-- Bank Filter -->
+	<entry>
+		<category term='filter'></category>
+		<title>Mail Filter</title>
+		<id>tag:mail.google.com,2008:filter:z0000001788035445583*2297923651986186862</id>
+		<updated>2026-10-04T17:53:42Z</updated>
+		<content></content>
+		<apps:property name='hasTheWord' value='{from:schwab.com from:webull.com from:webull.us from:webullpay.com from:robinhood.com from:binance.us from:stockpile.com from:tdameritrade.com} {eStatement &quot;account statement&quot; &quot;monthly statement&quot; statement statements &quot;credit card statement&quot; &quot;Brokerage Statement&quot;}'/>
+		<apps:property name='label' value='Banking'/>
+		<apps:property name='shouldArchive' value='true'/>
+		<apps:property name='sizeOperator' value='s_sl'/>
+		<apps:property name='sizeUnit' value='s_smb'/>
+	</entry>
+
+	<!-- Legal Filter -->
+	<entry>
+		<category term='filter'></category>
+		<title>Mail Filter</title>
+		<content></content>
+		<apps:property name='hasTheWord' value='{from:araglegal.com from:rocketlawyer.com &quot;ARAG&quot; &quot;Rocket Lawyer&quot; &quot;RocketLawyer&quot; court docket attorney counsel legal} {claim case matter document consultation signature signing &quot;power of attorney&quot; contract deed will filing hearing} -{&quot;special offer&quot; promo &quot;upgrade today&quot; discount newsletter savings &quot;start your free trial&quot;}'/>
+		<apps:property name='label' value='Legal'/>
+		<apps:property name='shouldArchive' value='true'/>
+		<apps:property name='sizeOperator' value='s_sl'/>
+		<apps:property name='sizeUnit' value='s_smb'/>
+	</entry>
+
+	<!-- Spam Filter -->
+	<entry>
+		<category term='filter'></category>
+		<title>Mail Filter</title>
+		<id>tag:mail.google.com,2008:filter:z0000001788035445899*1999721045836972614</id>
+		<updated>2026-10-04T17:54:08Z</updated>
+		<content></content>
+		<apps:property name='hasTheWord' value='{from:webull.com from:webull.us from:webullpay.com from:binance.com from:binance.us from:robinhood.com from:schwab.com from:stockpile.com from:investordelivery.com from:proxyvote.com from:tdameritrade.com}'/>
+		<apps:property name='doesNotHaveTheWord' value='{&quot;security alert&quot; &quot;verification code&quot; &quot;2-step&quot; 2FA &quot;sign-in&quot; password &quot;tax document&quot; 1099 &quot;tax form&quot; statement statements eStatement &quot;order executed&quot; &quot;trade confirmation&quot; deposit withdrawal wire transfer}'/>
+		<apps:property name='shouldTrash' value='true'/>
+		<apps:property name='sizeOperator' value='s_sl'/>
+		<apps:property name='sizeUnit' value='s_smb'/>
+	</entry>
+
+	<!-- Travel Filter -->
+	<entry>
+		<category term='filter'></category>
+		<title>Mail Filter</title>
+		<content></content>
+		<apps:property name='hasTheWord' value='{flight airline &quot;boarding pass&quot; itinerary reservation booking hotel &quot;car rental&quot;} {confirmation update receipt &quot;check-in&quot; &quot;gate change&quot; delay canceled ticket &quot;e-ticket&quot;} -{&quot;special offer&quot; &quot;deals&quot; &quot;save up to&quot; promo &quot;book now&quot; &quot;exclusive offer&quot; discount newsletter}'/>
+		<apps:property name='label' value='Travel'/>
+		<apps:property name='shouldArchive' value='true'/>
+		<apps:property name='sizeOperator' value='s_sl'/>
+		<apps:property name='sizeUnit' value='s_smb'/>
+	</entry>
+	<!-- Healthcare Filter -->
+	<entry>
+		<category term='filter'></category>
+		<title>Mail Filter</title>
+		<content></content>
+		<apps:property name='hasTheWord' value='{&quot;One Medical&quot; &quot;Modern Health&quot; from:onemedical.com from:modernhealth.com}'/>
+		<apps:property name='label' value='Healthcare'/>
+		<apps:property name='shouldArchive' value='true'/>
+		<apps:property name='sizeOperator' value='s_sl'/>
+		<apps:property name='sizeUnit' value='s_smb'/>
+	</entry>
+
+	<!-- Apartment Filter -->
+	<entry>
+		<category term='filter'></category>
+		<title>Mail Filter</title>
+		<content></content>
+		<apps:property name='hasTheWord' value='{Pepco &quot;Washington Gas&quot; from:trimarkpm.com from:buildinglink.com &quot;Atlas condominium&quot;}'/>
+		<apps:property name='label' value='Apartment'/>
+		<apps:property name='shouldArchive' value='true'/>
+		<apps:property name='sizeOperator' value='s_sl'/>
+		<apps:property name='sizeUnit' value='s_smb'/>
+	</entry>
+</feed>
